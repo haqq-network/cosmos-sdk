@@ -164,7 +164,12 @@ func BootstrapStateCmd(appCreator types.AppCreator) *cobra.Command {
 				DiscardABCIResponses: cfg.Storage.DiscardABCIResponses,
 			})
 
-			genState, _, err := node.LoadStateFromDBOrGenesisDocProvider(stateDB, node.DefaultGenesisDocProviderFunc(cfg))
+			genesisDocProvider := node.DefaultGenesisDocProviderFunc(cfg)
+
+			genDoc, _ := genesisDocProvider()
+
+			genState, err := node.LoadStateFromDBOrGenesisDoc(stateStore, stateDB, genDoc)
+
 			if err != nil {
 				return err
 			}
