@@ -12,23 +12,23 @@ import (
 func (ak AccountKeeper) InitGenesis(ctx sdk.Context, data types.GenesisState) {
 	ak.SetParams(ctx, data.Params)
 
-	ctx.Logger().Debug("AUTH: running UnpackAccounts")
+	ctx.Logger().Debug("AUTH#InitGenesis: running UnpackAccounts")
 
 	accounts, err := types.UnpackAccounts(data.Accounts)
 	if err != nil {
 		panic(err)
 	}
 
-	ctx.Logger().Debug("AUTH: running SanitizeGenesisAccounts")
+	ctx.Logger().Debug("AUTH#InitGenesis: running SanitizeGenesisAccounts")
 	accounts = types.SanitizeGenesisAccounts(accounts)
 
-	ctx.Logger().Debug("AUTH: running SetGenesisAccounts")
+	ctx.Logger().Debug("AUTH#InitGenesis: running SetGenesisAccounts")
 	for _, a := range accounts {
 		acc := ak.NewAccount(ctx, a)
 		ak.SetAccount(ctx, acc)
 	}
 
-	ctx.Logger().Debug("AUTH: running GetModuleAccount")
+	ctx.Logger().Debug("AUTH#InitGenesis: running GetModuleAccount")
 
 	ak.GetModuleAccount(ctx, types.FeeCollectorName)
 }
