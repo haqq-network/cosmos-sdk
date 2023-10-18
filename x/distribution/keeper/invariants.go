@@ -68,37 +68,73 @@ func CanWithdrawInvariant(k Keeper) sdk.Invariant {
 		ctx, _ = ctx.CacheContext()
 
 		var remaining sdk.DecCoins
-
 		valDelegationAddrs := make(map[string][]sdk.AccAddress)
+
 		for _, del := range k.stakingKeeper.GetAllSDKDelegations(ctx) {
 			valAddr := del.GetValidatorAddr().String()
 			valDelegationAddrs[valAddr] = append(valDelegationAddrs[valAddr], del.GetDelegatorAddr())
 		}
 
+		// Create a channel to collect results from goroutines
+		resultChan := make(chan sdk.DecCoins)
+
 		// iterate over all validators
 		k.stakingKeeper.IterateValidators(ctx, func(_ int64, val stakingtypes.ValidatorI) (stop bool) {
-			_, _ = k.WithdrawValidatorCommission(ctx, val.GetOperator())
+			go func(val stakingtypes.ValidatorI) {
+				var localRemaining sdk.DecCoins
+				_, _ = k.WithdrawValidatorCommission(ctx, val.GetOperator())
 
-			delegationAddrs, ok := valDelegationAddrs[val.GetOperator().String()]
-			if ok {
-				for _, delAddr := range delegationAddrs {
-					if _, err := k.WithdrawDelegationRewards(ctx, delAddr, val.GetOperator()); err != nil {
-						panic(err)
+				delegationAddrs, ok := valDelegationAddrs[val.GetOperator().String()]
+				if ok {
+					for _, delAddr := range delegationAddrs {
+						if _, err := k.WithdrawDelegationRewards(ctx, delAddr, val.GetOperator()); err != nil {
+							panic(err)
+						}
 					}
 				}
-			}
 
-			remaining = k.GetValidatorOutstandingRewardsCoins(ctx, val.GetOperator())
-			if len(remaining) > 0 && remaining[0].Amount.IsNegative() {
-				return true
-			}
-
+				localRemaining = k.GetValidatorOutstandingRewardsCoins(ctx, val.GetOperator())
+				resultChan <- localRemaining
+			}(val)
 			return false
 		})
 
+		// Wait for results from all validators
+		for range valDelegationAddrs {
+			localRemaining := <-resultChan
+			if len(localRemaining) > 0 && localRemaining[0].Amount.IsNegative() {
+				remaining = localRemaining
+			}
+		}
+
+		close(resultChan)
 		broken := len(remaining) > 0 && remaining[0].Amount.IsNegative()
 		return sdk.FormatInvariant(types.ModuleName, "can withdraw",
 			fmt.Sprintf("remaining coins: %v\n", remaining)), broken
+
+		// k.stakingKeeper.IterateValidators(ctx, func(_ int64, val stakingtypes.ValidatorI) (stop bool) {
+		// 	_, _ = k.WithdrawValidatorCommission(ctx, val.GetOperator())
+
+		// 	delegationAddrs, ok := valDelegationAddrs[val.GetOperator().String()]
+		// 	if ok {
+		// 		for _, delAddr := range delegationAddrs {
+		// 			if _, err := k.WithdrawDelegationRewards(ctx, delAddr, val.GetOperator()); err != nil {
+		// 				panic(err)
+		// 			}
+		// 		}
+		// 	}
+
+		// 	remaining = k.GetValidatorOutstandingRewardsCoins(ctx, val.GetOperator())
+		// 	if len(remaining) > 0 && remaining[0].Amount.IsNegative() {
+		// 		return true
+		// 	}
+
+		// 	return false
+		// })
+
+		// broken := len(remaining) > 0 && remaining[0].Amount.IsNegative()
+		// return sdk.FormatInvariant(types.ModuleName, "can withdraw",
+		// 	fmt.Sprintf("remaining coins: %v\n", remaining)), broken
 	}
 }
 
