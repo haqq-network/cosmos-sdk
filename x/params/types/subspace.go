@@ -3,6 +3,8 @@ package types
 import (
 	"fmt"
 	"reflect"
+	"runtime"
+	"sync"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/store/prefix"
@@ -251,19 +253,60 @@ func (s Subspace) GetParamSetIfExists(ctx sdk.Context, ps ParamSet) {
 
 // SetParamSet iterates through each ParamSetPair and sets the value with the
 // corresponding parameter key in the Subspace's KVStore.
+// func (s Subspace) SetParamSet(ctx sdk.Context, ps ParamSet) {
+// 	for _, pair := range ps.ParamSetPairs() {
+// 		// pair.Field is a pointer to the field, so indirecting the ptr.
+// 		// go-amino automatically handles it but just for sure,
+// 		// since SetStruct is meant to be used in InitGenesis
+// 		// so this method will not be called frequently
+// 		v := reflect.Indirect(reflect.ValueOf(pair.Value)).Interface()
+
+// 		if err := pair.ValidatorFn(v); err != nil {
+// 			panic(fmt.Sprintf("value from ParamSetPair is invalid: %s", err))
+// 		}
+
+// 		s.Set(ctx, pair.Key, v)
+// 	}
+// }
+
 func (s Subspace) SetParamSet(ctx sdk.Context, ps ParamSet) {
-	for _, pair := range ps.ParamSetPairs() {
-		// pair.Field is a pointer to the field, so indirecting the ptr.
-		// go-amino automatically handles it but just for sure,
-		// since SetStruct is meant to be used in InitGenesis
-		// so this method will not be called frequently
-		v := reflect.Indirect(reflect.ValueOf(pair.Value)).Interface()
+	pairs := ps.ParamSetPairs()
+	// Use number of CPU cores as a limit for concurrent goroutines
+	maxGoroutines := runtime.NumCPU()
+	sem := make(chan struct{}, maxGoroutines)
 
-		if err := pair.ValidatorFn(v); err != nil {
-			panic(fmt.Sprintf("value from ParamSetPair is invalid: %s", err))
+	var wg sync.WaitGroup
+	errorsChan := make(chan error, len(pairs))
+
+	for _, pair := range pairs {
+		wg.Add(1)
+		sem <- struct{}{} // Acquire a token
+
+		go func(p ParamSetPair) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release a token
+
+			// Process the pair
+			v := reflect.Indirect(reflect.ValueOf(p.Value)).Interface()
+
+			if err := p.ValidatorFn(v); err != nil {
+				errorsChan <- fmt.Errorf("value from ParamSetPair is invalid: %s", err)
+				return
+			}
+
+			s.Set(ctx, p.Key, v)
+		}(pair)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+	close(errorsChan)
+
+	// Handle any errors that occurred in the goroutines
+	for err := range errorsChan {
+		if err != nil {
+			panic(err)
 		}
-
-		s.Set(ctx, pair.Key, v)
 	}
 }
 
