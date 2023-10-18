@@ -3,7 +3,9 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sort"
+	"sync"
 
 	proto "github.com/gogo/protobuf/proto"
 
@@ -142,15 +144,65 @@ func PackAccounts(accounts GenesisAccounts) ([]*types.Any, error) {
 }
 
 // UnpackAccounts converts Any slice to GenesisAccounts
+// func UnpackAccounts(accountsAny []*types.Any) (GenesisAccounts, error) {
+// 	accounts := make(GenesisAccounts, len(accountsAny))
+// 	for i, any := range accountsAny {
+// 		acc, ok := any.GetCachedValue().(GenesisAccount)
+// 		if !ok {
+// 			return nil, fmt.Errorf("expected genesis account")
+// 		}
+// 		accounts[i] = acc
+// 	}
+
+// 	return accounts, nil
+// }
+
 func UnpackAccounts(accountsAny []*types.Any) (GenesisAccounts, error) {
-	accounts := make(GenesisAccounts, len(accountsAny))
-	for i, any := range accountsAny {
-		acc, ok := any.GetCachedValue().(GenesisAccount)
-		if !ok {
-			return nil, fmt.Errorf("expected genesis account")
-		}
-		accounts[i] = acc
+	numCores := runtime.NumCPU()
+
+	// Segments to divide the slice
+	segmentSize := len(accountsAny) / numCores
+	if segmentSize == 0 {
+		segmentSize = len(accountsAny)
 	}
 
+	results := make(chan GenesisAccount, len(accountsAny))
+	errors := make(chan error, numCores)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < len(accountsAny); i += segmentSize {
+		end := i + segmentSize
+		if end > len(accountsAny) {
+			end = len(accountsAny)
+		}
+
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			for j := start; j < end; j++ {
+				acc, ok := accountsAny[j].GetCachedValue().(GenesisAccount)
+				if !ok {
+					errors <- fmt.Errorf("expected genesis account")
+					return
+				}
+				results <- acc
+			}
+		}(i, end)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+		close(errors)
+	}()
+
+	accounts := make(GenesisAccounts, 0, len(accountsAny))
+	for acc := range results {
+		accounts = append(accounts, acc)
+	}
+	if len(errors) > 0 {
+		return nil, <-errors
+	}
 	return accounts, nil
 }
